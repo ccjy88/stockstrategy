@@ -1,30 +1,28 @@
 import numpy as np
 import tensorflow as tf
+import time
 
 '''读取K线'''
 K_FEATURE_MONTH_COUNT = 9
 
 '''评价K线'''
-K_FUTURE_MONTH_COUNT = 3 #rose fell plain
+K_FUTURE_MONTH_COUNT = 1
 
 DAYSDIR = r'D:\PycharmProjects\a3c\days'
 
 #下个状态三个，平，上涨、下跌
 FUTURE_LABEL = {'flat':0,
-          'up60c':  1, 'up40c':  2, 'up20c': 3,
-          'up60h':  4, 'up40h':  5, 'up20h': 6,
-          'dn60l':  7, 'dn40l':  8, 'dn20l': 9,
-          'dn60c': 10, 'dn40c': 11, 'dn20c': 12
+          'h30':1, 'h20':2, 'h10':3,
+          'l30':4, 'l20':5, 'l10':6
                 }
 FUTURE_ID = {FUTURE_LABEL[lb]:lb for lb in FUTURE_LABEL}
 N_FUTURE = len(FUTURE_ID)
 
 '''每次有上涨机会都会加分。涨幅大加的多60% 1.2 %40 1.1， %20加0.1,下跌不扣分。'''
 future_label_score = {'flat': 0,
-          'up60c':1.2, 'up60h':1.2, 'up40c':1.1,
-          'up40h':1.1, 'up20c':0.3, 'up20h':0.3,
-          'dn60c': -0.1, 'dn60l': -0.1, 'dn40c': -0.1,
-          'dn40l': -0.1, 'dn20c': -0.1, 'dn20l': -0.1}
+                      'h10':1.1, 'h20':1.2, 'h30':1.3,
+                      'l10':-1.1,'l20': -1.2, 'l30':-1.3}
+
 
 future_reward = {FUTURE_LABEL[lb]: future_label_score[lb] for lb in future_label_score}
 
@@ -82,7 +80,7 @@ class SkBrain(object):
         if len(monthdatas) == 0:
             return -1
         if removeafterdate>0 :
-            monthdatas = self.reader.removeDateAfter(monthdatas, removeafterdate)
+            monthdatas = self.reader.removeMonthDateAfter(monthdatas, removeafterdate)
         if len(monthdatas) < K_FEATURE_MONTH_COUNT + K_FUTURE_MONTH_COUNT:
           return -1
         fullmonthdata = self.reader.HExpand(monthdatas)
@@ -162,6 +160,9 @@ class SkdayReader(object):
     def __init__(self,skid):
         self.skid = skid
         self.monthdatas=[]
+        self.weekdatas=[]
+
+
         records=[]
         with open('{}\{}.txt'.format(DAYSDIR, skid),mode='r') as f:
             lines = f.readlines()
@@ -169,14 +170,16 @@ class SkdayReader(object):
                 if l.count('/') > 0:
                     words = l.split('\t')
                     yyyymm=int(words[0].strip().replace('/','')[0:6])
+                    #2000年前的不要了
                     if yyyymm <= 200000 :
                         continue
+                    yyyymmdd=int(words[0].strip().replace('/','')[0:8])
                     openv=float(words[1].strip())
                     highv=float(words[2].strip())
                     lowv=float(words[3].strip())
                     closev=float(words[4].strip())
                     #print(yyyymm,openv,highv,lowv,closev)
-                    records.append([yyyymm,openv,highv,lowv,closev])
+                    records.append([yyyymmdd,openv,highv,lowv,closev])
             self.days=np.array(records)
 
     def toMonth(self):
@@ -187,8 +190,9 @@ class SkdayReader(object):
         monthdata = []
         for i in range(self.days.shape[0]):
             daydata = self.days[i]
-            if (yymm != daydata[0]):
-                yymm = daydata[0]
+            tmpyymm = int(daydata[0]/100)
+            if (yymm != tmpyymm):
+                yymm = tmpyymm
                 monthdata=[yymm,daydata[1],daydata[2],daydata[3],daydata[4]]
                 self.monthdatas.append(monthdata)
             else:
@@ -198,21 +202,25 @@ class SkdayReader(object):
         self.monthdatas = np.array(self.monthdatas)
         return self.monthdatas
 
-    def removeDateAfter(self, monthdatas, removedate):
+    def removeMonthDateAfter(self, monthdatas, removedate):
         return np.delete(monthdatas, np.where(monthdatas[:, 0] >= removedate), axis=0)
+
+    def removeWeekDateAfter(self, weekdatas, removedate):
+        return np.delete(weekdatas, np.where(weekdatas[:, 0] >= removedate), axis=0)
 
     '''水平扩展，垂直错开一个月'''
     def HExpand(self, monthdatas):
         '''掐头'''
-        hexpandcount = K_FEATURE_MONTH_COUNT + K_FUTURE_MONTH_COUNT
+        hexpandcount = K_FEATURE_MONTH_COUNT + K_FUTURE_MONTH_COUNT - 1
         maxrow = len(monthdatas) - K_FEATURE_MONTH_COUNT + 1
         hs = monthdatas[0: maxrow]
         for i in range(hexpandcount):
-            c1 = monthdatas.copy()[i:, 1:]
+            c1 = monthdatas.copy()[i+1:, 1:]
             if len(c1) > maxrow:
-                c1 = c1[:maxrow - len(c1)]
+                c1 = c1[:maxrow - len(c1) ]
             elif len(c1) < maxrow:
                 dlt = maxrow - len(c1)
+                #复制最后一个实际值
                 for _ in range(dlt):
                     c1 = np.vstack((c1,c1[-1,]))
             hs = np.hstack([hs, c1])
@@ -221,12 +229,14 @@ class SkdayReader(object):
 
     '''每一行求对数'''
     def LogNormalData(self, monthdatas):
-        #岫除负
+        #删除负
         mins = np.min(monthdatas,axis=1)
         delindexes = np.where(mins <= 0)
 
         #不会处理负数
         monthdatas = np.delete(monthdatas,delindexes,axis=0)
+
+        #求对数,我们只对对数的大小有兴趣,就是只关心涨跌百分比，对股价绝对值没兴趣。
         monthdatas[:,1:] = np.log(monthdatas[:,1:])
 
         '''第一行，以第后一个feature k线收盘为基准'''
@@ -242,23 +252,23 @@ class SkdayReader(object):
         close = monthdata[:, 1 + K_FEATURE_MONTH_COUNT * 4 - 1]
         hhv = np.max(monthdata[:, 1 + K_FEATURE_MONTH_COUNT * 4:][:, 1::4],axis=1)
         llv = np.min(monthdata[:, 1 + K_FEATURE_MONTH_COUNT * 4:][:, 2::4],axis=1)
-        nextcloseh = np.max(monthdata[:, 1 + K_FEATURE_MONTH_COUNT * 4:][:, 3::4],axis=1)
+        #nextcloseh = np.max(monthdata[:, 1 + K_FEATURE_MONTH_COUNT * 4:][:, 3::4],axis=1)
         nextclosel = np.min(monthdata[:, 1 + K_FEATURE_MONTH_COUNT * 4:][:, 3::4],axis=1)
         future = np.zeros([len(close),])
 
-        future[(nextcloseh - close >= np.log(1.6)) & (future == 0)] = FUTURE_LABEL['up60c']
-        future[(hhv - close >= np.log(1.6)) & (future == 0)] = FUTURE_LABEL['up60h']
-        future[(nextcloseh - close >= np.log(1.4)) & (future == 0)] = FUTURE_LABEL['up40c']
-        future[(hhv - close >= np.log(1.4)) & (future == 0)] = FUTURE_LABEL['up40h']
-        future[(nextcloseh - close >= np.log(1.2)) & (future == 0)] = FUTURE_LABEL['up20c']
-        future[(hhv - close >= np.log(1.2)) & (future == 0)] = FUTURE_LABEL['up20h']
+        '''从涨到跌，只打一个标签'''
+        future[(nextclosel - close <= np.log(0.7)) & (future == 0)] = FUTURE_LABEL['l30']
+        future[(nextclosel - close <= np.log(0.8)) & (future == 0)] = FUTURE_LABEL['l20']
+        future[(nextclosel - close <= np.log(0.9)) & (future == 0)] = FUTURE_LABEL['l10']
 
-        future[(nextclosel - close <= np.log(0.4)) & (future == 0)] = FUTURE_LABEL['dn60c']
-        future[(llv - close <= np.log(0.4)) & (future == 0)] = FUTURE_LABEL['dn60l']
-        future[(nextclosel - close <= np.log(0.6)) & (future == 0)] = FUTURE_LABEL['dn40c']
-        future[(llv - close <= np.log(0.6)) & (future == 0)] = FUTURE_LABEL['dn40l']
-        future[(nextclosel - close <= np.log(0.8)) & (future == 0)] = FUTURE_LABEL['dn20c']
-        future[(llv - close <= np.log(0.8)) & (future == 0)] = FUTURE_LABEL['dn20l']
+
+        future[(hhv - close >= np.log(1.3)) & (future == 0)] = FUTURE_LABEL['h30']
+        future[(hhv - close >= np.log(1.2)) & (future == 0)] = FUTURE_LABEL['h20']
+        future[(hhv - close >= np.log(1.1)) & (future == 0)] = FUTURE_LABEL['h10']
+
+        future[(llv - close <= np.log(0.7)) & (future == 0)] = FUTURE_LABEL['l30']
+        future[(llv - close <= np.log(0.8)) & (future == 0)] = FUTURE_LABEL['l20']
+        future[(llv - close <= np.log(0.9)) & (future == 0)] = FUTURE_LABEL['l10']
 
         monthdata = np.hstack([monthdata,future[:,None]])
         return monthdata
@@ -272,7 +282,55 @@ class SkdayReader(object):
 
         return monthdatas[indexes_train], monthdatas[indexes_test]
 
+    def day2weekofyear(self,ymd):
+        y = int(ymd/10000)
+        m = int(int(ymd / 100) % 100)
+        d = int(ymd % 100)
+        strymd='{:4d}-{:02d}-{:02d}'.format(y, m, d)
+
+        #dayofweek 0表示星期1，6表示星期天。
+        dt = time.strptime(strymd,'%Y-%m-%d')
+        swofy = time.strftime("%W", dt)
+        return int(swofy)
+
+    def toWeek(self):
+        if len(self.weekdatas) > 0:
+            return self.weekdatas
+
+        weekofyear = -1
+        weekdata=[]
+        for i in range(self.days.shape[0]):
+            daydata = self.days[i]
+            tmpweekofyear = self.day2weekofyear(daydata[0])
+            if (weekofyear != tmpweekofyear ):
+                weekofyear = tmpweekofyear
+                weekdata=[int(daydata[0]/10000)*100+weekofyear ,daydata[1],daydata[2],daydata[3],daydata[4]]
+                self.weekdatas.append(weekdata)
+            else:
+                weekofyear = tmpweekofyear
+                weekdata[2] = max(weekdata[2],daydata[2])
+                weekdata[3] = min(weekdata[3],daydata[3])
+                weekdata[4] = daydata[4]
+        self.weekdatas = np.array(self.weekdatas)
+        return self.weekdatas
+
+    '''下一周最高价涨幅'''
+    def calcNextweekHHV(self,weekdatas):
+        week = weekdatas[:,[0,4]]
+        weeknext = weekdatas[:, -1][1:]
+        weeknext = np.hstack([weeknext, weeknext[-1]])
+        weeknext = weeknext[:,None]
+
+        week = np.hstack([week, weeknext])
+
+        uprate = week[:, -1] / week[:,-2]
+        week = np.hstack([week, uprate[:,None]])
+        return week
 
 
+# if __name__ == '__main__':
+#     r = SkdayReader('300055')
+#     ws = r.toWeek()
+#     r.Weekhhvpercent()
 
 
