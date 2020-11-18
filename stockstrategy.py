@@ -150,10 +150,17 @@ def calcEndmonth(endmonth,daysdir,delnegflag):
 
 if __name__ == '__main__':
     daysdir = r'D:\adatas\days'
-    #daysdir = r'D:\adatas\沪深'
+    #daysdir = r'D:\adatas\近期强势'
     endmonth = 202011
 
+    delnegflag = False
+    calcEndmonth(endmonth, daysdir, delnegflag)
+
+
+'''
+    daysdir = r'D:\adatas\沪深'
+    endmonth = 202011
     #删除回报差的
     delnegflag = True
-    #delnegflag = False
     calcEndmonth(endmonth, daysdir, delnegflag)
+'''
