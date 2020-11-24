@@ -157,7 +157,7 @@ class SkBrain(object):
 
 
 class SkdayReader(object):
-    def __init__(self,skid):
+    def __init__(self,skid, daybegin=0):
         self.skid = skid
         self.monthdatas=[]
         self.weekdatas=[]
@@ -169,7 +169,10 @@ class SkdayReader(object):
             for l in lines:
                 if l.count('/') > 0:
                     words = l.split('\t')
-                    yyyymm=int(words[0].strip().replace('/','')[0:6])
+                    yyyymmdd=int(words[0].strip().replace('/','')[0:8])
+                    if daybegin!=0 and yyyymmdd < daybegin:
+                        continue
+                    yyyymm = int(yyyymmdd / 100)
                     #2000年前的不要了
                     if yyyymm <= 200000 :
                         continue
