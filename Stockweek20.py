@@ -198,7 +198,6 @@ if __name__ == '__main__':
     brain = Week20Strategy(daysdir)
     priorsweekcount = 8
     # 这周数据保留，从这一周的事面开始删除
-    endyyyymmdd = 20201120
+    endyyyymmdd = 20201127
     targetyyyymmdd = endyyyymmdd
     brain.findgroupWeek20(endyyyymmdd, priorsweekcount, targetyyyymmdd)
-

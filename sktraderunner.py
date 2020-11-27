@@ -86,6 +86,7 @@ runningcolcount = 11
 class SktradeRunner(object):
     def __init__(self, daysdir):
         self.daysdir = daysdir
+        self.positiveflag = False
 
 
     '''运行'''
@@ -95,7 +96,9 @@ class SktradeRunner(object):
         LOW_COLINDEX = 3
         CLOSE_COLINDEX = 4
 
-        maxbuycount = 10
+        self.positiveflag = False
+
+        maxbuycount =10
         buypricelatchs = np.array([buyprice * np.power(buypricerate, i)for i in np.arange(0, maxbuycount)])
         buypricelatchs = np.round(buypricelatchs, 2)
         salepricelatchs =  buypricelatchs * salepricerate
@@ -124,8 +127,8 @@ class SktradeRunner(object):
         days = days[1:]
         for skday in days:
             if len(runningqueue) == 0:
-                print('全部都已关闭')
-                break
+                 print('全部都已关闭')
+                 break
 
             llv = skday[LOW_COLINDEX]
             hhv = skday[HIGH_COLINDEX]
@@ -155,13 +158,50 @@ class SktradeRunner(object):
                     #计算浮动
                     runningprofit = self.calcRunningprofit(runningqueue, skday[0], saleprice, False)
                     runrecord[runningprofit_col] = runningprofit
-                    runrecord[pureprofit_col] = runrecord[sumclosedprofit_col] + runrecord[runningprofit_col]
+                    pureprofit = runrecord[sumclosedprofit_col] + runrecord[runningprofit_col]
+                    runrecord[pureprofit_col] = pureprofit
 
 
                     if(len(closedqueue)==0):
                         closedqueue = runrecord[None,:]
                     else:
                         closedqueue = np.vstack([closedqueue, runrecord])
+
+                    forcesaleprice = saleprice
+
+                    #如果走正，保留最后一笔,其它清仓
+                    if runrecord[pureprofit_col] > 0:
+                        self.positiveflag = True
+                        while len(runningqueue)>1:
+                            runrecord = runningqueue[-2]
+                            runningqueue = np.delete(runningqueue, [len(runningqueue)-2], axis=0)
+
+                            runrecord[saledate_col] = skday[0]
+                            saleprice = forcesaleprice
+                            runrecord[saleprice_col] = saleprice
+                            qty = runrecord[buyqty_col]
+                            buymoney = runrecord[buymoney_col]
+                            salemoney = np.round(saleprice * qty, 2)
+                            runrecord[salemoney_col] = salemoney
+                            runrecord[closedprofit_col] = salemoney - buymoney
+
+                            # 利润合计
+                            runrecord[sumclosedprofit_col] = runrecord[closedprofit_col]
+                            if len(closedqueue) > 0:
+                                runrecord[sumclosedprofit_col] += np.sum(closedqueue[:, closedprofit_col], axis=0)
+                            # 计算浮动
+                            runningprofit = self.calcRunningprofit(runningqueue, skday[0], saleprice, False)
+                            runrecord[runningprofit_col] = runningprofit
+                            pureprofit = runrecord[sumclosedprofit_col] + runrecord[runningprofit_col]
+                            runrecord[pureprofit_col] = pureprofit
+
+                            if (len(closedqueue) == 0):
+                                closedqueue = runrecord[None, :]
+                            else:
+                                closedqueue = np.vstack([closedqueue, runrecord])
+
+                        break
+
             #不做T
             if saled: continue
             #是不是可以有可买的?
@@ -183,7 +223,7 @@ class SktradeRunner(object):
 
         #填最后一天收盘价到未完成
         p = self.calcRunningprofit(runningqueue,skday[0], skday[CLOSE_COLINDEX], True)
-        print('未完成利润{}'.format(p))
+        #print('未完成利润{:.2f}'.format(p))
         p1 = self.printRunningLog(runningqueue)
         print('========已完成=========')
         p2 = self.printClosedLog(closedqueue)
@@ -207,13 +247,14 @@ class SktradeRunner(object):
             print('无已完成')
             return  0
 
+        print('日期\t买价\t数量\t卖日\t卖价\t利润\t累计利\t浮动\t纯利')
         for r in closedqueue:
-            print('{:.0f}\t{:.2f}\t{:.2f}\t{:.0f}\t{:.2f}\t{:.2f}\t{:.2f}\t{:.2f}'
+            print('{:.0f}\t{:.2f}\t{:.2f}\t{:.0f}\t{:.2f}\t{:.2f}\t{:.2f}\t{:.2f}\t{:.2f}'
                   .format(r[buydate_col], r[buyprice_col], r[buyqty_col],
-                          r[saledate_col], r[saleprice_col], r[sumclosedprofit_col]
+                          r[saledate_col], r[saleprice_col], r[closedprofit_col], r[sumclosedprofit_col]
                           ,r[runningprofit_col],r[pureprofit_col]))
         sumclosedprofit = np.sum(closedqueue[:, closedprofit_col], axis=0)
-        print('区完成交易{}笔，利润{:.2f}:'.format(len(closedqueue), sumclosedprofit))
+        print('已完成交易{}笔，利润{:.2f}:'.format(len(closedqueue), sumclosedprofit))
         return sumclosedprofit
 
     def printRunningLog(self, runningqueue):
@@ -222,6 +263,7 @@ class SktradeRunner(object):
             print('全部完成')
             return  0
 
+        print('日期\t买价\t数量\t卖日\t卖价\t利润')
         for r in runningqueue:
             print('{:.0f}\t{:.2f}\t{:.2f}\t{:.0f}\t{:.2f}\t{:.2f}'
                   .format(r[buydate_col], r[buyprice_col], r[buyqty_col],
@@ -238,11 +280,11 @@ if __name__ == '__main__':
 
     daysdir = r'D:\adatas\沪深'
     runner = SktradeRunner(daysdir)
-    skid = '002019'
-    startymd = 20180427
-    buyprice =  19.17
-    buyqty = 400
-    endymd = 20200831
+    skid = '000860'
+    startymd = 20200908
+    buyprice =  67.15
+    buyqty = 200
+    endymd = 20201231
     runner.run(skid, startymd, buyqty,buyprice,endymd,buypricerate,salepricerate)
 
 
