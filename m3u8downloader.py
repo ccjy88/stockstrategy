@@ -1,5 +1,6 @@
 import logging
 import requests
+from requests.adapters import HTTPAdapter
 import os
 import configparser
 from multiprocessing.pool import ThreadPool
@@ -82,7 +83,7 @@ class Logger(object):
     def __init__(self):
         self.logger = logging.getLogger("suning")
         self.logger.setLevel(logging.INFO)
-        formatter = MSFormatter("%(asctime)s  %(message)s", datefmt=None)
+        formatter = MSFormatter("%(asctime)s %(threadName)s  %(message)s", datefmt=None)
         sh = logging.StreamHandler()
         sh.setFormatter(formatter)
         self.logger.addHandler(sh)
@@ -117,9 +118,11 @@ def executeDownloadts(param):
     logger=param["logger"]
 
     session = SessionBuilder().buildSession(configer, section='m3u8')
+    session.mount('http://', HTTPAdapter(max_retries=3))
+    session.mount('https://', HTTPAdapter(max_retries=3))
     logger.info("begin {}".format(url))
     try:
-        content = session.get(url).content
+        content = session.get(url, timeout=30).content
     except Exception as e:
         logger.error(e)
         return False
@@ -132,6 +135,7 @@ def executeDownloadts(param):
 class M3u8downloader:
     def __init__(self,url):
         self.url=url
+        self.targetfilenameset=set()
 
     def start(self):
         global configer
@@ -193,6 +197,7 @@ class M3u8downloader:
                 elif line.endswith(".ts"):
                     words=line.split('/')
                     filename = words[-1]
+                    self.targetfilenameset.add(filename)
 
                     listf.write('file {}\n'.format(filename))
                     fileout = os.path.join(tsdir, filename)
@@ -208,10 +213,19 @@ class M3u8downloader:
 
 
 
-        logger.info("开始pool")
-        pool = ThreadPool(cpu_count() -2 )
-        pool.map(executeDownloadts, tsfileurls)
-        logger.info("已结束pool")
+        while True:
+            exists = True
+            for filename in self.targetfilenameset:
+                fileout = os.path.join(tsdir, filename)
+                if os.path.exists(fileout)==False:
+                    exists = False
+                    break
+            if exists:break
+
+            logger.info("开始pool")
+            pool = ThreadPool( 5 )
+            pool.map(executeDownloadts, tsfileurls)
+            logger.info("已结束pool")
 
 
     def downloadContent(self,url):
@@ -222,6 +236,7 @@ class M3u8downloader:
 
 
 if __name__ == '__main__':
+
     configer = Config()
     logger=Logger()
     xkey=''
@@ -232,8 +247,9 @@ if __name__ == '__main__':
     if os.path.exists(tsdir)==False:
         os.mkdir(tsdir)
 
-    url=r''
+    url=configer.getString('m3u8','url')
     down = M3u8downloader(url)
     down.start()
+    logger.info("任务完成。")
 
 
