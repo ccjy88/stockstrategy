@@ -12,11 +12,14 @@ from lxml import etree
 import matplotlib.pyplot as plt
 from PIL import  Image
 from urllib import parse
+import re
+import qrcode
 
 '''需要安装升级'''
 #pip install Pillow
 #pip install Pillow -U
 #pip install matplotlib==3.0.3
+#pip install qrcode
 #--index https://pypi.tuna.tsinghua.edu.cn/simple
 
 #import matplotlib.image as mpimg
@@ -68,7 +71,7 @@ class SessionBuilder(object):
     def __init__(self):
         pass
 
-    def buildSession(self, configer,section='head'):
+    def buildSession(self, configer,section='head',referer_format = None):
         session = requests.Session()
         session.mount('http://', HTTPAdapter(max_retries=3))
         session.mount('https://', HTTPAdapter(max_retries=3))
@@ -78,12 +81,47 @@ class SessionBuilder(object):
         headers['Accept-Encoding']=configer.getString(section,'accept-encoding')
         headers['Accept-Language']=configer.getString(section,'accept-language')
         headers['Connection']=configer.getString(section,'connection')
-        headers['Referer']=configer.getString(section,'referer')
+        referer = configer.getString(section, 'referer')
+        if referer_format:
+            #用来替换ini中%s之类的占位符
+            referer = referer % referer_format
+        headers['Referer'] = referer
         headers['User-Agent']=configer.getString(section,'user-agent')
         session.headers = headers
         return session
 
 
+class Timer_Sn(object):
+    @classmethod
+    def jd_time(cls):
+        """
+        从苏 宁服务器获取时间毫秒
+        :return:
+        """
+        #{"api":"time","code":"1","currentTime": 1611557625486,"msg":""}
+        url = 'https://f.m.suning.com/api/ct.do'
+        ret = requests.get(url).text
+        js = json.loads(ret)
+        mtime = int(js["currentTime"])
+        # print("服务器时间:",mtime)
+        return mtime
+
+    @classmethod
+    def local_time(cls):
+        """
+        获取本地毫秒时间
+        :return:
+        """
+        mtime = int(round(time.time() * 1000))
+        return mtime
+
+    @classmethod
+    def local_jd_time_diff(cls):
+        """
+        计算本地与服务器时间差
+        :return:
+        """
+        return cls.local_time() - cls.jd_time()
 
 
 class MSFormatter(logging.Formatter):
@@ -185,7 +223,7 @@ class Login(object):
             if state==2:
                 self.popupLoginsuccess()
                 self.loginservice()
-                logger.info('手机已确认登录'.format(cookiedict))
+                logger.info('手机已确认登录:{}'.format(cookiedict))
                 with open('requesthead.txt','w') as f:
                     f.write('Cookie:'+cookiedict2str(cookiedict))
 
@@ -213,39 +251,99 @@ class Login(object):
 
         return resp
 
+
+'''测试立即购买 '''
+def nowBuy_test():
+    resp = httpget('nowbuy_test')
+    respstr = resp.text
+    logger.info(respstr)
+    issucess, errorcode, errormsg = parseJsonBuy(respstr)
+    if issucess == False or issucess == 'N':
+        weixinmsg = '购买失败, errorcode={} {}'.format(errorcode, errormsg)
+        logger.info(weixinmsg)
+        if errorcode == 3:
+            logger.info("商品无货，全局退出")
+            sendweixin('购买失败', weixinmsg)
+    else:
+        weixinmsg = 'issucess={}, errorcode={} {}'.format(
+            issucess, errorcode, errormsg)
+        logger.info(weixinmsg)
+        sendweixin('购买成功，尽快付款', weixinmsg)
+    exit(0)
+
+
 '''立即购买 '''
 def nowBuy():
-    resp = httpget('nowbuy')
-    respstr=resp.text
-    logger.info(respstr)
-    issucess,errorcode,errormsg = parseJsonBuy(respstr)
-    if issucess==False:
-        weixinmsg='购买失败, errorcode={} {}'.format(errorcode,errormsg)
-        logger.info(weixinmsg)
-        sendweixin('购买失败',weixinmsg)
-    else:
-        weixinmsg='issucess={}, errorcode={} {}'.format(issucess,errorcode,errormsg)
-        logger.info(weixinmsg)
-        sendweixin('购买成功',weixinmsg)
+    issucess = 0
+    errorcode = 0
+    errormsg = 0
+    while True:
+        resp = httpget('nowbuy')
+        respstr=resp.text
+        logger.info(respstr)
+        issucess,errorcode,errormsg = parseJsonBuy(respstr)
+        if issucess==False or issucess == 'N':
+            weixinmsg='购买失败, errorcode={} {}'.format(errorcode,errormsg)
+            logger.info(weixinmsg)
+            if errorcode == 3:
+                logger.info("商品无货，全局退出")
+                sendweixin('购买失败', weixinmsg)
+                break
+        else:
+            weixinmsg='issucess={}, errorcode={} {}'.format(issucess,errorcode,errormsg)
+            logger.info(weixinmsg)
+            sendweixin('购买成功，尽快付款',weixinmsg)
+            break
 
     return issucess,errorcode,errormsg
 
 def parseJsonBuy(str):
-    p1 = str.index("({")+1
-    p2 = str.index("})")+1
-    str = str[p1:p2]
-    obj = json.loads(str)
-    issuccess = "Y" == obj["isSuccess"]
+    p1 = ""
+    p2 = ""
+    obj = None
+    try:
+        p1 = str.index("({")+1
+        p2 = str.index("})")+1
+        str = str[p1:p2]
+        obj = json.loads(str)
+    except:
+        pass
+    issuccess = False
+    try:
+        issuccess = "Y" == obj["isSuccess"]
+    except:
+        pass
     errorCode=0
     errorMessage=''
     #print("是否成功:",issuccess)
-    resultErrorList=obj["resultErrorList"]
-    for resulterror in resultErrorList:
-        for edict in resulterror:
-            if 'errorCode' in edict:
-                errorCode = int(edict['errorCode'])
-                errorMessage=edict['errorMessage']
-                #print('错误代码:',edict['errorCode'])
+    if issuccess:
+        print("获取链接成功，进入结算页面!")
+        cart2No = obj["cart2No"]
+        print("https://shopping.suning.com/order.do?cart2No=%s" % (cart2No))
+
+        urlshow = "https://shopping.suning.com/order.do?cart2No=%s" % (cart2No)
+
+        #生成二维码，手机扫面进入手机提交界面，防止电脑提交的话，被盾
+        qr = qrcode.QRCode(
+            version=2, error_correction=qrcode.constants.ERROR_CORRECT_L, box_size=10, border=10,)
+        qr.add_data(urlshow)
+        qr.make(fit=True)
+        img = qr.make_image()
+        img.show()
+
+        #可以在这里提交订单
+
+        pass
+    try:
+        resultErrorList=obj["resultErrorList"]
+        for resulterror in resultErrorList:
+            for edict in resulterror:
+                if 'errorCode' in edict:
+                    errorCode = int(edict['errorCode'])
+                    errorMessage=edict['errorMessage']
+                    print('错误代码:',edict['errorCode'])
+    except:
+        pass
     return  issuccess,errorCode,errorMessage
 
 #分析预约结果
@@ -261,6 +359,8 @@ def parseJsonAppointment(str):
 
 #成功后发送微信
 def sendweixin(title,message):
+    return
+    logger.info('开始发送weixin:'+title+message)
     if message is None or len(message)==0:
         message='空消息'
     configer = Config()
@@ -297,7 +397,7 @@ def scheduleStart(task,hour,minute,second,offsetmillisencd):
 
 #从requesthead.txt中读取上次保存的cookie
 def readCookiefile():
-    with open('requesthead.txt','r') as f:
+    with open('requesthead.txt','r+') as f:
         lines = f.readlines()
         for l in lines:
             if l.startswith('Cookie'):break
@@ -337,19 +437,22 @@ def responseSetCookie(cookies):
 
 
 
-def httpget(section,otherheads={},allow_redirects=True):
+def httpget(section,otherheads={},allow_redirects=True,url_format = None,referer_format = None):
     configer = Config()
     url = configer.getString(section, 'url')
-    session = SessionBuilder().buildSession(configer, section)
+    if url_format:
+        url = url % url_format
+    # print("合成URL:",url)
+    session = SessionBuilder().buildSession(configer, section, referer_format=referer_format)
     session.headers.update(otherheads)
     resp = session.get(url,allow_redirects=allow_redirects,timeout=5)
     responseSetCookie(resp.cookies)
     return resp
 
-def httppost(section,data,otherheaders={}):
+def httppost(section,data,otherheaders={},referer_format=None):
     configer = Config()
     url = configer.getString(section, 'url')
-    session = SessionBuilder().buildSession(configer, section)
+    session = SessionBuilder().buildSession(configer,section,referer_format)
     session.headers.update(otherheaders)
     resp = session.post(url,data,timeout=5)
     responseSetCookie(resp.cookies)
@@ -409,6 +512,21 @@ def searchFeitianURL():
     return None
 
 
+def test():
+    logger.info("开始检查系统环境")
+    diffms = Timer_Sn.local_jd_time_diff()
+    logger.info("检查服务器延时:{}".format(diffms))
+    #全局的cookie，从上次登录成功的文件读取。cookie不超时就不需要重新登录。
+    cookiedict.update(str2dict(readCookiefile()))
+    logger.info("检查cookie是否有效:{}".format(
+        '不需要重新扫码'if Orderlist().isLoginok() else "需要重新扫码"))
+    schedulehour = c.getInt('nowbuytime', 'h')
+    schedulemin = c.getInt('nowbuytime', 'm')
+    schedulesecond = c.getInt('nowbuytime', 's')
+    offsetmillisecond = c.getInt('nowbuytime', 'ms')
+    logger.info('检查预设时间{}:{}:{},偏移{}毫秒,服务器误差{},一共偏移{}'.format(schedulehour, schedulemin,
+                                                              schedulesecond, offsetmillisecond, diffms, offsetmillisecond+diffms))
+    exit(0)
 
 if __name__ == '__main__':
 
@@ -444,6 +562,8 @@ if __name__ == '__main__':
         if login.doLogin()==True:
             break
 
+    # nowBuy_test()
+
     action = c.getInt('main','action')
     if action==1:
         flag=flagdict['预约']
@@ -472,6 +592,10 @@ if __name__ == '__main__':
         schedulesecond = c.getInt('nowbuytime','s')
         offsetmillisecond = c.getInt('nowbuytime','ms')
 
-        logger.info('准备定时购买，时间{}:{}:{},提前{}毫秒'.format(schedulehour,schedulemin,schedulesecond,offsetmillisecond))
-        scheduleStart(nowBuy,schedulehour, schedulemin, schedulesecond, offsetmillisecond)
-
+        diffms = Timer_Sn.local_jd_time_diff()
+        logger.info('准备定时购买，时间{}:{}:{},偏移{}毫秒,服务器误差{},一共偏移{}'.format(
+            schedulehour, schedulemin, schedulesecond, offsetmillisecond, diffms, offsetmillisecond+diffms))
+        #本来打算开多线程来抢购，但是发现多线程同时提交的话，只有一个线程会创建订单
+        for i in range(0, 1):
+            scheduleStart(nowBuy, schedulehour, schedulemin,
+                          schedulesecond, offsetmillisecond + i + diffms)
