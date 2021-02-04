@@ -9,10 +9,7 @@ import time
 import datetime
 #注：python3 安装 Crypto 是 pip install pycryptodome
 from Crypto.Cipher import AES
-
-
-
-
+import  sys
 
 
 class Config(object):
@@ -113,9 +110,13 @@ def aes_decode(data, key):
 def executeDownloadts(param):
     url = param["url"]
     fileout=param["fileout"]
+
     xkey = param["xkey"]
     configer=param["configer"]
     logger=param["logger"]
+    if fileout in finishedfileout:
+        logger.info('已经完成不再重复 {}'.format(fileout))
+        return
 
     session = SessionBuilder().buildSession(configer, section='m3u8')
     session.mount('http://', HTTPAdapter(max_retries=3))
@@ -130,6 +131,7 @@ def executeDownloadts(param):
         content = aes_decode(content, xkey)
     with open(fileout, 'wb') as f:
         f.write(content)
+        finishedfileout.add(fileout)
     return True
 
 class M3u8downloader:
@@ -150,7 +152,7 @@ class M3u8downloader:
         return True
 
     def parseM3u8(self,url, text):
-        global  logger,tsdir
+        global  logger,tsdir, tsfileurls
         dirpath = '/'.join(url.split('/')[:-1])+'/'
         sitepath = '/'.join(url.split('/')[:3])+'/'
 
@@ -212,18 +214,19 @@ class M3u8downloader:
                     extflag=True
 
 
+        pool = ThreadPool( cpu_count() - 2 )
 
-        while True:
+        for t in range(3):
             exists = True
             for filename in self.targetfilenameset:
                 fileout = os.path.join(tsdir, filename)
                 if os.path.exists(fileout)==False:
+                    logger.error('not exists %s' %(fileout))
                     exists = False
                     break
             if exists:break
 
             logger.info("开始pool")
-            pool = ThreadPool( 5 )
             pool.map(executeDownloadts, tsfileurls)
             logger.info("已结束pool")
 
@@ -235,7 +238,18 @@ class M3u8downloader:
 
 
 
+def testaecencode(key,raw):
+   # key = str2int(key)
+
+    key = '1234567890123456'
+
+    cryptor = AES.new(key,AES.MODE_CBC,key)
+   # cipher.encrypt(raw)
+
 if __name__ == '__main__':
+    tsfileurls=[]
+    finishedfileout=set()
+
 
     configer = Config()
     logger=Logger()
@@ -243,7 +257,7 @@ if __name__ == '__main__':
 
     logger.info('cpucount={}'.format(cpu_count()))
     #带AES
-    tsdir='outdir'
+    tsdir=r'd:\pycharmprojects\outdir'
     if os.path.exists(tsdir)==False:
         os.mkdir(tsdir)
 
