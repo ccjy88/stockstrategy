@@ -115,8 +115,8 @@ def executeDownloadts(param):
     configer=param["configer"]
     logger=param["logger"]
     if fileout in finishedfileout:
-        logger.info('已经完成不再重复 {}'.format(fileout))
-        return
+        #logger.info('已经完成不再重复 {}'.format(fileout))
+        return True
 
     session = SessionBuilder().buildSession(configer, section='m3u8')
     session.mount('http://', HTTPAdapter(max_retries=3))
@@ -132,6 +132,8 @@ def executeDownloadts(param):
     with open(fileout, 'wb') as f:
         f.write(content)
         finishedfileout.add(fileout)
+        percent = len(finishedfileout)/len(tsfileurls) * 100
+        logger.info('完成{:.2f}%'.format(percent))
     return True
 
 class M3u8downloader:
@@ -208,13 +210,13 @@ class M3u8downloader:
                     if line.startswith("/"):
                         fileurl = sitepath + line[1:]
                     else:
-                        fileurl = dirpath+line[1:]
+                        fileurl = dirpath+line
                     tsfileurls.append({'url': fileurl,'fileout': fileout,"configer":configer,"logger": logger,"xkey":xkey})
                 elif line.startswith("#EXT-X-STREAM-INF"):
                     extflag=True
 
 
-        pool = ThreadPool( cpu_count() - 2 )
+        pool = ThreadPool( int(cpu_count() * 1.5) )
 
         for t in range(3):
             exists = True
@@ -257,7 +259,8 @@ if __name__ == '__main__':
 
     logger.info('cpucount={}'.format(cpu_count()))
     #带AES
-    tsdir=r'd:\pycharmprojects\outdir'
+    #tsdir=r'd:\pycharmprojects\outdir'
+    tsdir = configer.getString('m3u8','outdir')
     if os.path.exists(tsdir)==False:
         os.mkdir(tsdir)
 
